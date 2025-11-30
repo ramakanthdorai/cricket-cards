@@ -1,0 +1,198 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"/>
+<title>Cricket Card Flipper — cut_cards</title>
+
+<style>
+  :root{ --bg:#030312; --glass: rgba(255,255,255,0.06); --muted: rgba(255,255,255,0.75); }
+  html,body{height:100%;margin:0;background:linear-gradient(180deg,#02020a 0%, #071629 60%);font-family:Inter,system-ui,-apple-system,"Helvetica Neue",Arial;color:#fff}
+  .stage{position:fixed;inset:0;display:flex;align-items:center;justify-content:center;overflow:hidden;-webkit-tap-highlight-color:transparent}
+  .bg-hero{position:absolute;inset:0;filter:blur(28px) saturate(110%);opacity:0.35;background:
+    radial-gradient(600px 300px at 10% 10%, rgba(255,209,102,0.08), transparent 10%),
+    radial-gradient(500px 260px at 90% 90%, rgba(239,71,111,0.06), transparent 12%),
+    radial-gradient(400px 200px at 60% 30%, rgba(14,165,233,0.03), transparent 10%);pointer-events:none}
+  .card-wrap{width:100vw;height:100vh;display:flex;align-items:center;justify-content:center;position:relative;padding:28px;box-sizing:border-box}
+  .card{display:flex;align-items:center;justify-content:center;position:relative;border-radius:20px;overflow:visible;
+        background:linear-gradient(180deg, rgba(255,255,255,0.02), rgba(255,255,255,0.01));
+        box-shadow:0 30px 80px rgba(0,0,0,0.65), 0 6px 18px rgba(0,0,0,0.5);padding:20px}
+  .card-inner{display:flex;align-items:center;justify-content:center;position:relative;
+    transform-style:preserve-3d;backface-visibility:hidden;}
+  img.card-img{
+    display:block; max-width:100%; max-height:100%; height:auto; width:auto; object-fit:contain;
+    user-select:none; -webkit-user-drag:none; border-radius:6px; transition:transform 420ms cubic-bezier(.22,.9,.32,1), opacity 260ms ease;
+    will-change:transform,opacity;
+  }
+  .hud{position:absolute;left:0;right:0;bottom:18px;display:flex;align-items:center;justify-content:center;pointer-events:none}
+  .index-pill{padding:8px 14px;border-radius:999px;background:var(--glass);backdrop-filter:blur(6px);color:var(--muted);font-weight:600;font-size:14px}
+
+  /* SHUFFLE BADGE */
+  .shuffle-pill{
+    position:absolute;top:16px;right:16px;
+    padding:8px 14px;border-radius:999px;background:var(--glass);
+    backdrop-filter:blur(6px);color:var(--muted);
+    font-weight:600;font-size:14px;
+    cursor:pointer;user-select:none;
+  }
+
+  .hint{position:absolute;top:22px;left:50%;transform:translateX(-50%);pointer-events:none;color:rgba(255,255,255,0.8);font-weight:600;font-size:13px;padding:8px 14px;border-radius:999px;background:linear-gradient(180deg, rgba(255,255,255,0.03), rgba(255,255,255,0.02));backdrop-filter: blur(6px)}
+  .overlay{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;z-index:50;padding:28px}
+  .overlay-card{width:min(88vw,560px);padding:22px;border-radius:16px;background:rgba(2,6,23,0.6);box-shadow:0 40px 120px rgba(2,6,23,0.7);text-align:center}
+  .overlay h1{margin:0 0 8px 0;font-size:20px} .overlay p{margin:0;font-size:14px}
+  .progress{position:absolute;right:16px;top:66px;width:44px;height:44px;border-radius:999px;background:rgba(255,255,255,0.02);display:grid;place-items:center;padding:6px}
+  .progress small{font-size:11px;color:rgba(255,255,255,0.85);font-weight:700}
+
+</style>
+</head>
+<body>
+
+<div class="stage" id="stage" aria-hidden="false">
+  <div class="bg-hero" aria-hidden="true"></div>
+
+  <div class="card-wrap">
+    <div class="card" id="card" role="img">
+      <div class="card-inner" id="cardInner"></div>
+    </div>
+  </div>
+
+  <div class="hud"><div class="index-pill" id="indexPill">0 / 0</div></div>
+  <div class="shuffle-pill" id="shuffleBtn">Shuffle</div>
+  <div class="hint" id="hint">Tap anywhere to draw • Swipe left/right to navigate</div>
+  <div class="progress" id="progress" style="display:none"><small id="progressLabel">0%</small></div>
+
+  <div class="overlay" id="overlay">
+    <div class="overlay-card">
+      <h1>Cricket Card Flipper</h1>
+      <p>Swipe or tap to draw. Now includes Shuffle!</p>
+    </div>
+  </div>
+</div>
+
+<script>
+/* CONFIG */
+const usePattern = true;
+const TOTAL_CARDS = 234;
+const FILENAME_TEMPLATE = 'cut_cards/{i}.png';
+
+let cardList = [];
+for(let i=1;i<=TOTAL_CARDS;i++) cardList.push(FILENAME_TEMPLATE.replace('{i}',String(i)));
+
+const stage = document.getElementById('stage');
+const cardInner = document.getElementById('cardInner');
+const overlay = document.getElementById('overlay');
+const indexPill = document.getElementById('indexPill');
+const progressWrap = document.getElementById('progress');
+const progressLabel = document.getElementById('progressLabel');
+const hint = document.getElementById('hint');
+
+let index = 0;
+const cache = {};
+const PRELOAD_AHEAD = 3;
+
+const img = document.createElement('img');
+img.className = 'card-img';
+img.style.opacity = 0;
+img.decoding = 'async';
+cardInner.appendChild(img);
+
+function preloadAt(i){
+  i = ((i % cardList.length) + cardList.length) % cardList.length;
+  if(cache[i]) return Promise.resolve(cache[i]);
+  return new Promise(res=>{
+    const im = new Image();
+    im.decoding='async';
+    im.onload=()=>{cache[i]=im;res(im)};
+    im.onerror=()=>{cache[i]=null;res(null)};
+    im.src = cardList[i];
+  });
+}
+
+async function ensurePreloaded(){
+  const toLoad=[];
+  for(let j=0;j<=PRELOAD_AHEAD;j++) toLoad.push(preloadAt(index+j));
+  progressWrap.style.display='grid';
+  progressLabel.textContent='0%';
+  let done=0;
+  for(const p of toLoad){ await p; done++; progressLabel.textContent=Math.round(done/toLoad.length*100)+'%'; }
+  setTimeout(()=>progressWrap.style.display='none',180);
+}
+
+function fitImageToViewport(imgEl){
+  const w = imgEl.naturalWidth;
+  const h = imgEl.naturalHeight;
+  const maxW = window.innerWidth - 56;
+  const maxH = window.innerHeight - 92;
+  const scale = Math.min(1, maxW/w, maxH/h);
+  imgEl.style.width = (w*scale)+'px';
+}
+
+async function showCard(i,opts={direction:1}){
+  index = ((i % cardList.length)+cardList.length)%cardList.length;
+  indexPill.textContent = `${index+1} / ${cardList.length}`;
+  await ensurePreloaded();
+
+  const cached = cache[index];
+  const src = (cached && cached.src) || cardList[index];
+
+  img.style.opacity = 0;
+  setTimeout(()=>{ img.src = src; },80);
+
+  img.onload = ()=>{
+    fitImageToViewport(img);
+    img.style.opacity = 1;
+  };
+}
+
+let sx=0, sy=0, st=0;
+function onTouchStart(e){ const t=e.touches?e.touches[0]:e; sx=t.clientX; sy=t.clientY; st=Date.now(); }
+function onTouchEnd(e){
+  const t=e.changedTouches?e.changedTouches[0]:e;
+  const dx=t.clientX-sx, dy=t.clientY-sy, dt=Date.now()-st;
+  if(Math.abs(dx)>40 && Math.abs(dx)>Math.abs(dy)){
+    if(dx<0) showCard(index+1);
+    else showCard(index-1);
+  } else if(dt<400 && Math.abs(dx)<20 && Math.abs(dy)<20){
+    showCard(index+1);
+  }
+}
+
+function onKey(e){
+  if(e.key==='ArrowLeft') showCard(index-1);
+  if(e.key==='ArrowRight'||e.key===' ') showCard(index+1);
+}
+
+/* -------------------------
+   SHUFFLE FEATURE (ADDED)
+--------------------------*/
+function shuffleDeck(){
+  for(let i=cardList.length-1;i>0;i--){
+    const j = Math.floor(Math.random()* (i+1));
+    [cardList[i], cardList[j]] = [cardList[j], cardList[i]];
+  }
+  index = 0;
+  cache = {};
+  showCard(0);
+}
+document.getElementById('shuffleBtn').addEventListener('click', shuffleDeck);
+/* ---------------------------------------------------------- */
+
+function init(){
+  if(!cardList.length) return;
+  overlay.style.opacity=1;
+  setTimeout(()=>overlay.style.display='none',600);
+  preloadAt(0); preloadAt(1);
+  showCard(0);
+
+  stage.addEventListener('touchstart', onTouchStart,{passive:true});
+  stage.addEventListener('touchend', onTouchEnd,{passive:true});
+  stage.addEventListener('mousedown', onTouchStart);
+  stage.addEventListener('mouseup', onTouchEnd);
+  window.addEventListener('keydown', onKey);
+  window.addEventListener('resize', ()=>{ if(img.complete) fitImageToViewport(img); });
+}
+
+document.addEventListener('DOMContentLoaded', init);
+</script>
+</body>
+</html>
